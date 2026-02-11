@@ -2,9 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
-// 使用 gemini-1.5-flash-001 以确保兼容性，避免 404
-const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash-001",
+// 使用最稳定的 gemini-pro 作为基础模型
+const textModel = genAI.getGenerativeModel({
+    model: "gemini-pro",
+    generationConfig: {
+        responseMimeType: "application/json",
+    }
+});
+
+// 图片模型尝试使用 gemini-1.5-flash，如果失败则回退到 gemini-pro-vision (但在 Vercel 可能超时)
+const visionModel = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
     generationConfig: {
         responseMimeType: "application/json",
     }
@@ -45,9 +53,11 @@ export async function POST(req: NextRequest) {
     }`;
 
         let promptParts: any[] = [systemPrompt];
+        let currentModel = textModel;
 
         if (type === "text") {
             promptParts.push(`这是学生的作文内容：\n\n${content}`);
+            currentModel = textModel; // 纯文本使用 gemini-pro
         } else if (type === "image" && content instanceof File) {
             const buffer = await content.arrayBuffer();
             const base64 = Buffer.from(buffer).toString("base64");
@@ -58,11 +68,12 @@ export async function POST(req: NextRequest) {
                     mimeType: content.type
                 }
             });
+            currentModel = visionModel; // 图片使用 flash
         } else {
             return NextResponse.json({ error: "无效的提交内容" }, { status: 400 });
         }
 
-        const result = await model.generateContent(promptParts);
+        const result = await currentModel.generateContent(promptParts);
         const responseText = result.response.text();
 
         try {
@@ -70,13 +81,22 @@ export async function POST(req: NextRequest) {
             return NextResponse.json(jsonResult);
         } catch (parseError) {
             console.error("JSON Parse Error:", parseError, responseText);
+            // 尝试修复 JSON
+            const fixedJsonMatch = responseText.match(/\{[\s\S]*\}/);
+            if (fixedJsonMatch) {
+                try {
+                    return NextResponse.json(JSON.parse(fixedJsonMatch[0]));
+                } catch (e) {
+                    return NextResponse.json({ error: "AI 返回内容格式错误，请重试" }, { status: 500 });
+                }
+            }
             return NextResponse.json({ error: "AI 返回格式错误" }, { status: 500 });
         }
     } catch (error: any) {
         console.error("Gemini Analysis Error:", error);
         // 返回更详细的错误信息
         return NextResponse.json({
-            error: (error.message || "AI 分析失败，请稍后重试") + " (v2.1 DEBUG)",
+            error: (error.message || "AI 分析失败，请稍后重试") + " (v3.0 PRO/FLASH)",
             details: JSON.stringify(error)
         }, { status: 500 });
     }
