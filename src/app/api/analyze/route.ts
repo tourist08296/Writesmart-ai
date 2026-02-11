@@ -3,9 +3,10 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
 
-// 根据您的模型列表，使用 gemini-2.0-flash-lite-001，这是一个稳定且快速的版本
+// 切换到标准版 gemini-2.0-flash，通常比 Lite 版有更好的免费层支持
+// 备选: gemini-2.0-flash-001
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash-lite-001",
+    model: "gemini-2.0-flash",
     generationConfig: {
         responseMimeType: "application/json",
     }
@@ -13,6 +14,26 @@ const model = genAI.getGenerativeModel({
 
 // 设置 Vercel 函数最大执行时间为 60 秒
 export const maxDuration = 60;
+
+// 简单的延迟函数
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 带重试的生成函数
+async function generateWithRetry(model: any, promptParts: any[], retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await model.generateContent(promptParts);
+        } catch (error: any) {
+            // 如果是 429 (Too Many Requests) 或者是 503 (Service Unavailable)，则等待后重试
+            if ((error.status === 429 || error.status === 503) && i < retries - 1) {
+                console.log(`Attempt ${i + 1} failed with ${error.status}. Retrying...`);
+                await delay(2000 * (i + 1)); // 第一次等2秒，第二次等4秒
+                continue;
+            }
+            throw error;
+        }
+    }
+}
 
 export async function POST(req: NextRequest) {
     try {
@@ -63,7 +84,8 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "无效的提交内容" }, { status: 400 });
         }
 
-        const result = await model.generateContent(promptParts);
+        // 使用带重试的生成函数
+        const result = await generateWithRetry(model, promptParts);
         const responseText = result.response.text();
 
         try {
@@ -76,7 +98,6 @@ export async function POST(req: NextRequest) {
                 try {
                     return NextResponse.json(JSON.parse(fixedJsonMatch[0]));
                 } catch (e) {
-                    console.error("JSON Fix Failed:", e);
                     return NextResponse.json({ error: "AI 返回内容格式错误", details: responseText }, { status: 500 });
                 }
             }
@@ -84,8 +105,14 @@ export async function POST(req: NextRequest) {
         }
     } catch (error: any) {
         console.error("Gemini Analysis Error:", error);
+
+        let errorMsg = error.message || "AI 分析失败，请稍后重试";
+        if (error.status === 429) {
+            errorMsg = "当前请求过多，请稍等 10 秒后再试 (429 Rate Limit)";
+        }
+
         return NextResponse.json({
-            error: (error.message || "AI 分析失败，请稍后重试") + " (v4.0 GEMINI 2.0)",
+            error: errorMsg + " (v5.0 RETRY)",
             details: JSON.stringify(error)
         }, { status: 500 });
     }
