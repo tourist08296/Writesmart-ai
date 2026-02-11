@@ -9,6 +9,9 @@ const model = genAI.getGenerativeModel({
     }
 });
 
+// 设置 Vercel 函数最大执行时间为 60 秒 (Hobby 计划上限)
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
     try {
         const formData = await req.formData();
@@ -70,6 +73,10 @@ export async function POST(req: NextRequest) {
         }
     } catch (error: any) {
         console.error("Gemini Analysis Error:", error);
-        return NextResponse.json({ error: "AI 分析失败，请稍后重试" }, { status: 500 });
+        // 返回更详细的错误信息
+        return NextResponse.json({
+            error: error.message || "AI 分析失败，请稍后重试",
+            details: JSON.stringify(error)
+        }, { status: 500 });
     }
 }
