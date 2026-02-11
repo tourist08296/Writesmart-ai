@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
+// 使用 gemini-1.5-flash-001 以确保兼容性，避免 404
 const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash-latest",
+    model: "gemini-1.5-flash-001",
     generationConfig: {
         responseMimeType: "application/json",
     }
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
         console.error("Gemini Analysis Error:", error);
         // 返回更详细的错误信息
         return NextResponse.json({
-            error: error.message || "AI 分析失败，请稍后重试",
+            error: (error.message || "AI 分析失败，请稍后重试") + " (v2.1 DEBUG)",
             details: JSON.stringify(error)
         }, { status: 500 });
     }
