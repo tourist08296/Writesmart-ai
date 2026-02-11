@@ -2,23 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "");
-// 使用最稳定的 gemini-pro 作为基础模型
-const textModel = genAI.getGenerativeModel({
-    model: "gemini-pro",
+
+// 根据您的模型列表，使用 gemini-2.0-flash-lite-001，这是一个稳定且快速的版本
+const model = genAI.getGenerativeModel({
+    model: "gemini-2.0-flash-lite-001",
     generationConfig: {
         responseMimeType: "application/json",
     }
 });
 
-// 图片模型尝试使用 gemini-1.5-flash，如果失败则回退到 gemini-pro-vision (但在 Vercel 可能超时)
-const visionModel = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    generationConfig: {
-        responseMimeType: "application/json",
-    }
-});
-
-// 设置 Vercel 函数最大执行时间为 60 秒 (Hobby 计划上限)
+// 设置 Vercel 函数最大执行时间为 60 秒
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
@@ -28,7 +21,7 @@ export async function POST(req: NextRequest) {
         const content = formData.get("content");
 
         if (!process.env.GOOGLE_GEMINI_API_KEY) {
-            return NextResponse.json({ error: "未配置 Gemini API Key" }, { status: 500 });
+            return NextResponse.json({ error: "服务器配置错误: 未设置 API Key" }, { status: 500 });
         }
 
         const systemPrompt = `你是一位专业的语文老师和写作教练。你的任务是分析学生提交的作文并提供评分和反馈。
@@ -53,11 +46,9 @@ export async function POST(req: NextRequest) {
     }`;
 
         let promptParts: any[] = [systemPrompt];
-        let currentModel = textModel;
 
         if (type === "text") {
             promptParts.push(`这是学生的作文内容：\n\n${content}`);
-            currentModel = textModel; // 纯文本使用 gemini-pro
         } else if (type === "image" && content instanceof File) {
             const buffer = await content.arrayBuffer();
             const base64 = Buffer.from(buffer).toString("base64");
@@ -68,35 +59,33 @@ export async function POST(req: NextRequest) {
                     mimeType: content.type
                 }
             });
-            currentModel = visionModel; // 图片使用 flash
         } else {
             return NextResponse.json({ error: "无效的提交内容" }, { status: 400 });
         }
 
-        const result = await currentModel.generateContent(promptParts);
+        const result = await model.generateContent(promptParts);
         const responseText = result.response.text();
 
         try {
             const jsonResult = JSON.parse(responseText);
             return NextResponse.json(jsonResult);
         } catch (parseError) {
-            console.error("JSON Parse Error:", parseError, responseText);
-            // 尝试修复 JSON
+            // 尝试提取 JSON
             const fixedJsonMatch = responseText.match(/\{[\s\S]*\}/);
             if (fixedJsonMatch) {
                 try {
                     return NextResponse.json(JSON.parse(fixedJsonMatch[0]));
                 } catch (e) {
-                    return NextResponse.json({ error: "AI 返回内容格式错误，请重试" }, { status: 500 });
+                    console.error("JSON Fix Failed:", e);
+                    return NextResponse.json({ error: "AI 返回内容格式错误", details: responseText }, { status: 500 });
                 }
             }
-            return NextResponse.json({ error: "AI 返回格式错误" }, { status: 500 });
+            return NextResponse.json({ error: "AI 返回格式错误", details: responseText }, { status: 500 });
         }
     } catch (error: any) {
         console.error("Gemini Analysis Error:", error);
-        // 返回更详细的错误信息
         return NextResponse.json({
-            error: (error.message || "AI 分析失败，请稍后重试") + " (v3.0 PRO/FLASH)",
+            error: (error.message || "AI 分析失败，请稍后重试") + " (v4.0 GEMINI 2.0)",
             details: JSON.stringify(error)
         }, { status: 500 });
     }
